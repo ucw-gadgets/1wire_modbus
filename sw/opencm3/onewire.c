@@ -22,19 +22,28 @@ uint8_t samples;
 volatile int ow_wait;
 
 
-void ow_init(uint32_t aport, uint16_t apin)
+void ow_init(void)
 {
-	port = aport;
-	pin = apin;
-	gpio_set_output_options(port, GPIO_OTYPE_OD, GPIO_OSPEED_HIGH, pin);
-	gpio_set(port, pin);
-	
 	timer_set_prescaler(TIM1, CPU_CLOCK_MHZ - 1);	// 1 tick = 1 μs
 	//timer_set_prescaler(TIM1, 1);	// 1 tick = 1 μs
 	timer_set_mode(TIM1, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_DOWN);
 	//timer_update_on_overflow(TIM1);
 	nvic_enable_irq(NVIC_TIM1_BRK_UP_TRG_COM_IRQ);	
 	timer_disable_preload(TIM1);
+}
+
+void ow_init_pin(uint32_t aport, uint16_t apin){
+	port = aport;
+	pin = apin;
+
+	gpio_mode_setup(port, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, pin);
+	gpio_set_output_options(port, GPIO_OTYPE_OD, GPIO_OSPEED_HIGH, pin);
+	gpio_set(port, pin);
+}
+
+void ow_set_pin(uint32_t aport, uint16_t apin){
+	port = aport;
+	pin = apin;
 }
 
 uint8_t crc_bits(uint8_t data)

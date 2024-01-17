@@ -17,7 +17,9 @@ enum oneWireEventType
 	OW_END = 4,
 };
 
-	void ow_init(uint32_t port, uint16_t pin);
+	void ow_init();
+	void ow_init_pin(uint32_t port, uint16_t pin);
+	void ow_set_pin(uint32_t port, uint16_t pin);
 	void ow_reset_search(void);
 	bool ow_search(uint8_t *newAddr, bool search_mode /* = true */);
 	void ow_set_precision(uint8_t *addr, uint8_t prec);

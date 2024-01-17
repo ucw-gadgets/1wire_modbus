@@ -8,11 +8,10 @@
 //#define DS_DEBUG
 //#define DS_DEBUG2
 
-#define DS_TIMER TIM3
-#define DS_GPIO GPIOA
-#define DS_PIN GPIO7
-#define DS_DMA DMA1
-#define DS_DMA_CH 6
+#define DS1_GPIO GPIOA
+#define DS1_PIN GPIO7
+#define DS2_GPIO GPIOA
+#define DS2_PIN GPIO6
 
 #define MODBUS_STATUS_REG	1
 #define MODBUS_UPTIME_REG	2

@@ -130,7 +130,7 @@ void modbus_set_coil(u16 addr, bool value)
 
 bool modbus_check_input_register(u16 addr)
 {
-	for (int i=0;i<ow_n_therm;i++){
+	for (unsigned int i=0;i<ow_n_therm;i++){
 		if (addr == MODBUS_OW_ADDR1_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
 			return true;
 		}
@@ -162,7 +162,7 @@ u16 modbus_get_input_register(u16 addr)
 {
 	// iwdg_reset();
 	// printf("Get input registers: %d\n",addr);
-	for (int i=0;i<ow_n_therm;i++){
+	for (unsigned int i=0;i<ow_n_therm;i++){
 		if (addr == MODBUS_OW_ADDR1_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
 			return ow_addr1[i];
 		}
@@ -277,7 +277,6 @@ int main(void)
 	i2c_setup();
 	sht_init();
 
-	ds_init();
 
 	gpio_mode_setup(GPIOB, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO3);
 
@@ -296,9 +295,11 @@ int main(void)
 	uint8_t n_addr;
 	n_addr = 0;
 
-	uint16_t temperature;
+	int16_t temperature;
 	
-	ow_init(GPIOA, GPIO7);
+	ow_init();
+	ow_init_pin(GPIOA, GPIO7);
+	ow_init_pin(GPIOA, GPIO6);
 
 	while (1)
 	{
@@ -313,9 +314,10 @@ int main(void)
 			debug_printf("temp: %d, hum: %d \n", sht_temp, sht_hum);
 			last_sht_read = ms_ticks;
 		}
-		if (ms_ticks - last_ow_read > 100)
+		if (ms_ticks - last_ow_read > 1000)
 		{
 			n_addr = 0;
+			ow_set_pin(DS1_GPIO, DS1_PIN);
 			ow_reset_search();
 			while (ow_search(ow_addr[n_addr], 1))
 			{
@@ -328,12 +330,15 @@ int main(void)
 				ow_start_conversion(ow_addr[i]);
 			}
 			if (n_addr > 0){
-				delay_ms(1000);
+				uint32_t start_conversion_time = ms_ticks;
+				while (ms_ticks - start_conversion_time < 1000){
+					modbus_loop();
+				}
 			}
 			for (int i = 0; i < n_addr; i++)
 			{
 				temperature = ow_read_temperature(ow_addr[i]);
-				if (temperature < -120)
+				if (temperature < -12000)
 				{
 					temperature = ow_read_temperature(ow_addr[i]);
 				}
@@ -343,9 +348,47 @@ int main(void)
 				ow_temp[i] = temperature;
 
 				// printf("Temperature: %f\n", temperature);
-				delay_ms(100);
+				delay_ms(1);
 			}
 			ow_n_therm = n_addr;
+
+			
+			n_addr = 0;
+			ow_set_pin(DS2_GPIO, DS2_PIN);
+			ow_reset_search();
+			while (ow_search(ow_addr[n_addr], 1))
+			{
+				n_addr++;
+			}
+			for (int i = 0; i < n_addr; i++)
+			{
+
+				ow_set_precision(ow_addr[i], (1 << 5) | (1 << 6));
+				ow_start_conversion(ow_addr[i]);
+			}
+			if (n_addr > 0){
+				uint32_t start_conversion_time = ms_ticks;
+				while (ms_ticks - start_conversion_time < 1000){
+					modbus_loop();
+				}
+			}
+			for (int i = 0; i < n_addr; i++)
+			{
+				temperature = ow_read_temperature(ow_addr[i]);
+				if (temperature < -120)
+				{
+					temperature = ow_read_temperature(ow_addr[i]);
+				}
+				ow_addr1[ow_n_therm + i] = ow_addr[i][1]<<8 | ow_addr[i][2];
+				ow_addr2[ow_n_therm + i] = ow_addr[i][3]<<8 | ow_addr[i][4];
+				ow_addr3[ow_n_therm + i] = ow_addr[i][5]<<8 | ow_addr[i][6];
+				ow_temp[ow_n_therm + i] = temperature;
+
+				// printf("Temperature: %f\n", temperature);
+				delay_ms(1);
+			}
+			ow_n_therm += n_addr;
+			
 			last_ow_read = ms_ticks;
 		}
 
