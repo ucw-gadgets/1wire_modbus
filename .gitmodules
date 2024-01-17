@@ -1,0 +1,6 @@
+[submodule "sw/opencm3/stm32lib"]
+	path = sw/opencm3/stm32lib
+	url = https://github.com/ucw-gadgets/stm32lib.git
+[submodule "sw/opencm3/libopencm3"]
+	path = sw/opencm3/libopencm3
+	url = https://github.com/libopencm3/libopencm3.git
