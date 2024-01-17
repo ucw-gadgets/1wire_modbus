@@ -36,7 +36,7 @@ void ow_init_pin(uint32_t aport, uint16_t apin){
 	port = aport;
 	pin = apin;
 
-	gpio_mode_setup(port, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, pin);
+	gpio_mode_setup(port, GPIO_MODE_OUTPUT, GPIO_PUPD_PULLUP, pin);
 	gpio_set_output_options(port, GPIO_OTYPE_OD, GPIO_OSPEED_HIGH, pin);
 	gpio_set(port, pin);
 }

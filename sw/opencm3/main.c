@@ -292,14 +292,16 @@ int main(void)
 	last_ow_read = ms_ticks;
 
 	uint8_t ow_addr[4][8];
+	uint8_t n_addr_total;
+	n_addr_total = 0;
 	uint8_t n_addr;
 	n_addr = 0;
 
 	int16_t temperature;
 	
 	ow_init();
-	ow_init_pin(GPIOA, GPIO7);
-	ow_init_pin(GPIOA, GPIO6);
+	ow_init_pin(DS1_GPIO, DS1_PIN);
+	ow_init_pin(DS2_GPIO, DS2_PIN);
 
 	while (1)
 	{
@@ -317,6 +319,7 @@ int main(void)
 		if (ms_ticks - last_ow_read > 1000)
 		{
 			n_addr = 0;
+			n_addr_total = 0;
 			ow_set_pin(DS1_GPIO, DS1_PIN);
 			ow_reset_search();
 			while (ow_search(ow_addr[n_addr], 1))
@@ -350,7 +353,7 @@ int main(void)
 				// printf("Temperature: %f\n", temperature);
 				delay_ms(1);
 			}
-			ow_n_therm = n_addr;
+			n_addr_total = n_addr;
 
 			
 			n_addr = 0;
@@ -379,15 +382,16 @@ int main(void)
 				{
 					temperature = ow_read_temperature(ow_addr[i]);
 				}
-				ow_addr1[ow_n_therm + i] = ow_addr[i][1]<<8 | ow_addr[i][2];
-				ow_addr2[ow_n_therm + i] = ow_addr[i][3]<<8 | ow_addr[i][4];
-				ow_addr3[ow_n_therm + i] = ow_addr[i][5]<<8 | ow_addr[i][6];
-				ow_temp[ow_n_therm + i] = temperature;
+				ow_addr1[n_addr_total + i] = ow_addr[i][1]<<8 | ow_addr[i][2];
+				ow_addr2[n_addr_total + i] = ow_addr[i][3]<<8 | ow_addr[i][4];
+				ow_addr3[n_addr_total + i] = ow_addr[i][5]<<8 | ow_addr[i][6];
+				ow_temp[n_addr_total + i] = temperature;
 
 				// printf("Temperature: %f\n", temperature);
 				delay_ms(1);
 			}
-			ow_n_therm += n_addr;
+			n_addr_total += n_addr;
+			ow_n_therm = n_addr_total;
 			
 			last_ow_read = ms_ticks;
 		}
