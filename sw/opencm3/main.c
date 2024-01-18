@@ -5,6 +5,10 @@
 #include "libopencm3/stm32/usart.h"
 #include "libopencm3/stm32/i2c.h"
 #include "libopencm3/cm3/nvic.h"
+#include "libopencm3/stm32/adc.h"
+#include "libopencm3/stm32/dma.h"
+#include "libopencm3/stm32/dmamux.h"
+#include "libopencm3/stm32/memorymap.h"
 
 #include "config.h"
 
@@ -26,6 +30,9 @@ uint16_t ow_addr2[DS_NUM_SENSORS];
 uint16_t ow_addr3[DS_NUM_SENSORS];
 uint16_t ow_temp[DS_NUM_SENSORS];
 
+volatile uint16_t adc_res[ADC_NCHANNELS];
+volatile uint32_t n_dmaint;
+
 void sys_tick_handler(void)
 {
 	ms_ticks++;
@@ -44,6 +51,104 @@ static void delay_ms(uint ms)
 	while (ms_ticks - start_ticks < ms)
 		;
 }
+
+void adc_setup(void)
+{
+	gpio_mode_setup(GPIOB, GPIO_MODE_ANALOG, GPIO_PUPD_NONE, GPIO7);
+
+	adc_power_off(ADC1);
+	adc_set_clk_prescale(ADC1, ADC_CCR_PRESC_DIV2);
+	adc_set_single_conversion_mode(ADC1);
+	adc_set_right_aligned(ADC1);
+	adc_set_sample_time_on_all_channels(ADC1, ADC_SMPTIME_160DOT5);
+	adc_enable_temperature_sensor();
+	adc_enable_vrefint();
+
+	adc_calibrate(ADC1);
+
+	uint8_t channel_array[ADC_NCHANNELS] = {0};
+	channel_array[0] = 11;
+	channel_array[1] = ADC_CHANNEL_TEMP;
+	channel_array[2] = ADC_CHANNEL_VREF;
+	adc_set_regular_sequence(ADC1, ADC_NCHANNELS, channel_array);
+	adc_enable_dma_circular_mode(ADC1);
+	adc_set_resolution(ADC1, ADC_CFGR1_RES_12_BIT);
+
+	// ADC DMA start
+	adc_set_continuous_conversion_mode(ADC1);
+	// adc_set_operation_mode(ADC1,ADC_MODE_SCAN_INFINITE);
+
+	//adc_disable_discontinuous_mode(ADC1);
+	adc_enable_eoc_interrupt(ADC1);
+	nvic_enable_irq(NVIC_ADC_COMP_IRQ);
+	nvic_enable_irq(NVIC_DMA1_CHANNEL1_IRQ);
+
+	adc_enable_dma_circular_mode(ADC1);
+	adc_enable_dma(ADC1);
+	// ADC DMA end
+
+	adc_power_on(ADC1);
+	delay_ms(10);
+	// ADC DMA start
+	adc_start_conversion_regular(ADC1);
+	return;
+}
+void adc_comp_isr() {
+	ADC_ISR(ADC1) = ADC_ISR_EOC;
+	n_dmaint++;
+}
+
+static void dma_setup(void)
+{
+	adc_power_off(ADC1);
+	dma_channel_reset(DMA1, DMA_CHANNEL1);
+
+	dma_set_peripheral_address(DMA1, DMA_CHANNEL1, (uint32_t)&ADC_DR(ADC1));
+	dma_set_memory_address(DMA1, DMA_CHANNEL1, (uint32_t)&adc_res);
+	dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL1);
+	dma_set_peripheral_size(DMA1, DMA_CHANNEL1, DMA_CCR_PSIZE_16BIT);
+	dma_set_memory_size(DMA1, DMA_CHANNEL1, DMA_CCR_MSIZE_16BIT);
+	dma_set_priority(DMA1, DMA_CHANNEL1, DMA_CCR_PL_LOW);
+
+	dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL1);
+	dma_set_number_of_data(DMA1, DMA_CHANNEL1, ADC_NCHANNELS);
+	dma_enable_circular_mode(DMA1, DMA_CHANNEL1);
+	dma_set_read_from_peripheral(DMA1, DMA_CHANNEL1);
+
+	//	dma_enable_mem2mem_mode(DMA1, DMA_CHANNEL1);
+	//	dma_disable_peripheral_increment_mode(DMA1, DMA_CHANNEL1);
+
+	dma_enable_channel(DMA1, DMA_CHANNEL1);
+	//	adc_enable_dma(DMA1);
+
+	dmamux_reset_dma_channel(DMAMUX1, DMA_CHANNEL1);
+	dmamux_set_dma_channel_request(DMAMUX1, DMA_CHANNEL1, DMAMUX_CxCR_DMAREQ_ID_ADC);
+}
+
+void dma1_channel1_isr(void)
+{
+	dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_IFCR_CGIF1);
+	//n_dmaint++;
+}
+static uint16_t calculate_temperature(uint16_t vcc, uint16_t temp_val){
+	int32_t tmp;
+	tmp = (uint32_t)temp_val*vcc/4096;	//temp val in mV
+	temp_val = (tmp - (ST_TSENSE_CAL1_30C*3000/4096))*2/5+30;
+	return temp_val;
+	//return tmp;
+}
+
+static uint16_t calculate_voltage(uint16_t adc_val){
+
+	//uint16_t vrefint_cal;                        // VREFINT calibration value
+	//vrefint_cal= ST_VREFINT_CAL; // read VREFINT_CAL_ADDR memory location
+	
+	uint16_t voltage;
+	voltage = 3000 * ST_VREFINT_CAL/adc_val;
+	return voltage;
+}
+
+
 
 void usart_setup(void)
 {
@@ -130,17 +235,22 @@ void modbus_set_coil(u16 addr, bool value)
 
 bool modbus_check_input_register(u16 addr)
 {
-	for (unsigned int i=0;i<ow_n_therm;i++){
-		if (addr == MODBUS_OW_ADDR1_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
+	for (unsigned int i = 0; i < ow_n_therm; i++)
+	{
+		if (addr == MODBUS_OW_ADDR1_BASE_REG + i * MODBUS_OW_REGS_PER_THERM)
+		{
 			return true;
 		}
-		if (addr == MODBUS_OW_ADDR2_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
+		if (addr == MODBUS_OW_ADDR2_BASE_REG + i * MODBUS_OW_REGS_PER_THERM)
+		{
 			return true;
 		}
-		if (addr == MODBUS_OW_ADDR3_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
+		if (addr == MODBUS_OW_ADDR3_BASE_REG + i * MODBUS_OW_REGS_PER_THERM)
+		{
 			return true;
 		}
-		if (addr == MODBUS_OW_TEMP_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
+		if (addr == MODBUS_OW_TEMP_BASE_REG + i * MODBUS_OW_REGS_PER_THERM)
+		{
 			return true;
 		}
 	}
@@ -162,17 +272,22 @@ u16 modbus_get_input_register(u16 addr)
 {
 	// iwdg_reset();
 	// printf("Get input registers: %d\n",addr);
-	for (unsigned int i=0;i<ow_n_therm;i++){
-		if (addr == MODBUS_OW_ADDR1_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
+	for (unsigned int i = 0; i < ow_n_therm; i++)
+	{
+		if (addr == MODBUS_OW_ADDR1_BASE_REG + i * MODBUS_OW_REGS_PER_THERM)
+		{
 			return ow_addr1[i];
 		}
-		if (addr == MODBUS_OW_ADDR2_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
+		if (addr == MODBUS_OW_ADDR2_BASE_REG + i * MODBUS_OW_REGS_PER_THERM)
+		{
 			return ow_addr2[i];
 		}
-		if (addr == MODBUS_OW_ADDR3_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
+		if (addr == MODBUS_OW_ADDR3_BASE_REG + i * MODBUS_OW_REGS_PER_THERM)
+		{
 			return ow_addr3[i];
 		}
-		if (addr == MODBUS_OW_TEMP_BASE_REG + i*MODBUS_OW_REGS_PER_THERM){
+		if (addr == MODBUS_OW_TEMP_BASE_REG + i * MODBUS_OW_REGS_PER_THERM)
+		{
 			return (uint16_t)ow_temp[i];
 		}
 	}
@@ -255,12 +370,15 @@ int main(void)
 	rcc_periph_clock_enable(RCC_TIM2);
 	rcc_periph_clock_enable(RCC_TIM1);
 	rcc_periph_clock_enable(RCC_DMA1);
+	rcc_periph_clock_enable(RCC_ADC);
 
 	rcc_periph_reset_pulse(RST_GPIOA);
 	rcc_periph_reset_pulse(RST_GPIOB);
 	rcc_periph_reset_pulse(RST_USART2);
 	rcc_periph_reset_pulse(RST_I2C2);
 	rcc_periph_reset_pulse(RST_TIM1);
+	rcc_periph_reset_pulse(RST_ADC);
+	rcc_periph_reset_pulse(RST_DMA1);
 
 	// gpio_primary_remap(AFIO_MAPR_SWJ_CFG_JTAG_OFF_SW_ON, 0);
 
@@ -271,12 +389,11 @@ int main(void)
 	gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO2 | GPIO3);
 	gpio_set_af(GPIOA, GPIO_AF1, GPIO2 | GPIO3);
 
-	gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO7);
-	gpio_set_output_options(GPIOA, GPIO_OTYPE_OD, GPIO_OSPEED_HIGH, GPIO7);
-
 	i2c_setup();
 	sht_init();
 
+	dma_setup();
+	adc_setup();
 
 	gpio_mode_setup(GPIOB, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO3);
 
@@ -298,13 +415,16 @@ int main(void)
 	n_addr = 0;
 
 	int16_t temperature;
-	
+
 	ow_init();
 	ow_init_pin(DS1_GPIO, DS1_PIN);
 	ow_init_pin(DS2_GPIO, DS2_PIN);
 
 	while (1)
 	{
+		adc_3V3_v = calculate_voltage(adc_res[2]);
+		adc_temp_int = calculate_temperature(adc_3V3_v, adc_res[1]);
+		adc_vin_v = adc_res[0]*adc_3V3_v/4096*(470+47)/47;
 		if (ms_ticks - last_blink > 500)
 		{
 			gpio_toggle(GPIOB, GPIO3);
@@ -332,9 +452,11 @@ int main(void)
 				ow_set_precision(ow_addr[i], (1 << 5) | (1 << 6));
 				ow_start_conversion(ow_addr[i]);
 			}
-			if (n_addr > 0){
+			if (n_addr > 0)
+			{
 				uint32_t start_conversion_time = ms_ticks;
-				while (ms_ticks - start_conversion_time < 1000){
+				while (ms_ticks - start_conversion_time < 1000)
+				{
 					modbus_loop();
 				}
 			}
@@ -345,9 +467,9 @@ int main(void)
 				{
 					temperature = ow_read_temperature(ow_addr[i]);
 				}
-				ow_addr1[i] = ow_addr[i][1]<<8 | ow_addr[i][2];
-				ow_addr2[i] = ow_addr[i][3]<<8 | ow_addr[i][4];
-				ow_addr3[i] = ow_addr[i][5]<<8 | ow_addr[i][6];
+				ow_addr1[i] = ow_addr[i][1] << 8 | ow_addr[i][2];
+				ow_addr2[i] = ow_addr[i][3] << 8 | ow_addr[i][4];
+				ow_addr3[i] = ow_addr[i][5] << 8 | ow_addr[i][6];
 				ow_temp[i] = temperature;
 
 				// printf("Temperature: %f\n", temperature);
@@ -355,8 +477,12 @@ int main(void)
 			}
 			n_addr_total = n_addr;
 
-			
 			n_addr = 0;
+			for (int i = 0; i < 8; i++)
+			{
+				ow_addr[0][i] = 0xEE;
+				temperature = 0;
+			}
 			ow_set_pin(DS2_GPIO, DS2_PIN);
 			ow_reset_search();
 			while (ow_search(ow_addr[n_addr], 1))
@@ -369,22 +495,24 @@ int main(void)
 				ow_set_precision(ow_addr[i], (1 << 5) | (1 << 6));
 				ow_start_conversion(ow_addr[i]);
 			}
-			if (n_addr > 0){
+			if (n_addr > 0)
+			{
 				uint32_t start_conversion_time = ms_ticks;
-				while (ms_ticks - start_conversion_time < 1000){
+				while (ms_ticks - start_conversion_time < 1000)
+				{
 					modbus_loop();
 				}
 			}
 			for (int i = 0; i < n_addr; i++)
 			{
 				temperature = ow_read_temperature(ow_addr[i]);
-				if (temperature < -120)
+				if (temperature < -12000)
 				{
 					temperature = ow_read_temperature(ow_addr[i]);
 				}
-				ow_addr1[n_addr_total + i] = ow_addr[i][1]<<8 | ow_addr[i][2];
-				ow_addr2[n_addr_total + i] = ow_addr[i][3]<<8 | ow_addr[i][4];
-				ow_addr3[n_addr_total + i] = ow_addr[i][5]<<8 | ow_addr[i][6];
+				ow_addr1[n_addr_total + i] = ow_addr[i][1] << 8 | ow_addr[i][2];
+				ow_addr2[n_addr_total + i] = ow_addr[i][3] << 8 | ow_addr[i][4];
+				ow_addr3[n_addr_total + i] = ow_addr[i][5] << 8 | ow_addr[i][6];
 				ow_temp[n_addr_total + i] = temperature;
 
 				// printf("Temperature: %f\n", temperature);
@@ -392,7 +520,7 @@ int main(void)
 			}
 			n_addr_total += n_addr;
 			ow_n_therm = n_addr_total;
-			
+
 			last_ow_read = ms_ticks;
 		}
 

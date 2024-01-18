@@ -291,11 +291,9 @@ int32_t ow_read_temperature(uint8_t *addr)
 			printf("%x ", result[i]);
 		}
 		printf("\n");*/
-		return -128;
+		return -12800;
 	}
-	int32_t temp;
-	temp = result[0]*100 / 16.0 + result[1]*100 * 16.0;
-	return temp;
+	return ((int32_t) result[0] | (result[1]<<8))*100/16;
 	/*printf("Scratchpad: ");
 	for (int i=0;i<9;i++){
 		printf("%x ",result[i]);
@@ -511,14 +509,14 @@ void tim1_brk_up_trg_com_isr(){
     event = events[eventCount];
     switch (event.event){
       case OW_HIGH:
-	gpio_set_output_options(port, GPIO_OTYPE_PP, GPIO_OSPEED_HIGH, pin);
+	GPIO_OTYPER(port) &= ~pin;
 	gpio_set(port, pin);
         break;
       case OW_LOW:
 	gpio_clear(port, pin);
         break;
       case OW_FLOAT:
-	gpio_set_output_options(port, GPIO_OTYPE_OD, GPIO_OSPEED_HIGH, pin);
+	GPIO_OTYPER(port) |= pin;
 	gpio_set(port, pin);
         break;
       case OW_SAMPLE:

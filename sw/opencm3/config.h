@@ -13,6 +13,8 @@
 #define DS2_GPIO GPIOA
 #define DS2_PIN GPIO7
 
+#define ADC_NCHANNELS	3
+
 #define MODBUS_STATUS_REG	1
 #define MODBUS_UPTIME_REG	2
 #define MODBUS_VIN_REG	5
